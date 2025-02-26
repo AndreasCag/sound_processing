@@ -47,6 +47,7 @@ class BreathingDataset(Dataset):
                 wave = resampler(wave)
             
             random_audios.append({
+                "stem": audio_file.stem,
                 "soundwave": wave,
                 "duration": wave.shape[1] / self.sample_rate
             })
@@ -62,9 +63,14 @@ class BreathingDataset(Dataset):
         for sound_path_str in sounds_list:
             sound_path = Path(sound_path_str)
             wave, sample_rate = torchaudio.load(sound_path, normalize = True)
+            print(f"Loaded {sound_path.stem} - {wave.shape}")
+
+            if sample_rate != self.sample_rate:
+                resampler = torchaudio.transforms.Resample(sample_rate, self.sample_rate)
+                wave = resampler(wave)
 
             labels = []
-            labels_path = sound_path.parent / "label" / (sound_path.stem + ".txt")
+            labels_path = sound_path.parent / "label" / (sound_path.stem.replace('_denoised', '') + ".txt")
 
             with labels_path.open("r") as f:
                 for line in f:
@@ -121,18 +127,12 @@ class BreathingDataset(Dataset):
         # print(sound["rate"])
         # print(time_start, time_end)
         # print(relevant_labels)
-
+        # print(f"{sound['stem']} - {time_start} - {time_end}")
 
         waveform = sound["soundwave"][
             :,
-            int(time_start * sound["rate"]) : (
-                int(time_start * sound["rate"]) + self.sample_length_sec * sound["rate"]
-            ),
+            int(time_start * self.sample_rate) : int(time_end * self.sample_rate),
         ]
-
-        if sound["rate"] != self.sample_rate:
-            resampler = torchaudio.transforms.Resample(sound["rate"], self.sample_rate)
-            waveform = resampler(waveform)
 
         if self.transform:
             waveform = self.transform(waveform)
@@ -147,15 +147,23 @@ class BreathingDataset(Dataset):
         return waveform, label_map[biggest_label]
 
     def get_random_noise(self):
+        should_generate_synthetic = random.random()
+
+        if (should_generate_synthetic > 0.9):
+            return self.generate_synthetic_noise('white')
+        if (should_generate_synthetic > 0.8):
+            return self.generate_synthetic_noise('pink')
+        if (should_generate_synthetic > 0.7):
+            return self.generate_synthetic_noise('brown')
+
         sound = random.choice(self.random_audios)
         time_start = random.random() * (sound['duration'] - self.sample_length_sec)
         time_end = time_start + self.sample_length_sec
+        # print(f"{sound['stem']} - {time_start} - {time_end}")
 
         waveform = sound["soundwave"][
             :,
-            int(time_start * self.sample_rate) : (
-                int(time_start * self.sample_rate) + self.sample_length_sec * self.sample_rate
-            ),
+            int(time_start * self.sample_rate) : int(time_end * self.sample_rate),
         ]
 
         if self.transform:
@@ -171,14 +179,16 @@ class BreathingDataset(Dataset):
             # Use a different seed for each index but make it reproducible
             random.seed(self.seed + idx)
 
-        expected_label = 0 if random.random() > 0.5 else 1
+        expected_label = 0 if random.random() > 0.35 else 1
 
         if expected_label == 0:
+            rnd_noise = self.get_random_noise()
+
             if self.seed is not None:
                 # Use a different seed for each index but make it reproducible
                 random.seed(None)
 
-            return self.get_random_noise()
+            return rnd_noise
 
         while True:
             wave, label = self.get_random_sample()
@@ -189,6 +199,40 @@ class BreathingDataset(Dataset):
             # Use a different seed for each index but make it reproducible
             random.seed(None)
         return wave, label
+
+    def generate_synthetic_noise(self, noise_type="white"):
+        num_samples = int(self.sample_rate * self.sample_length_sec)
+        
+        if noise_type == "white":
+            # Generate white noise (uniform distribution between -1 and 1)
+            noise = torch.rand(num_samples) * 2 - 1
+        
+        elif noise_type == "pink":
+            # Generate pink noise (1/f spectrum)
+            white = torch.rand(num_samples) * 2 - 1
+            # Create pink noise by applying 1/f filter in frequency domain
+            freqs = torch.fft.rfftfreq(num_samples)
+            spectrum = torch.fft.rfft(white)
+            pink_filter = 1 / torch.sqrt(freqs[1:])  # 1/f filter
+            spectrum[1:] *= pink_filter
+            noise = torch.fft.irfft(spectrum, n=num_samples)
+            # Normalize
+            noise = noise / noise.abs().max()
+        
+        elif noise_type == "brown":
+            # Generate brown noise (random walk / integrated white noise)
+            white = torch.rand(num_samples) * 2 - 1
+            noise = torch.cumsum(white, dim=0)
+            # Normalize
+            noise = noise / noise.abs().max()
+        
+        else:
+            raise ValueError(f"Unknown noise type: {noise_type}")
+        
+        # Ensure the noise is in the right format and scale
+        noise = noise.float()
+        
+        return noise, 0
 
 if __name__ == "__main__":
     # Initialize dataset with example parameters

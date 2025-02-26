@@ -2,56 +2,37 @@ import torch
 import torch.nn as nn
 
 class RawAudioCNN(nn.Module):
-    def __init__(self, num_classes=2):
+    def __init__(self):
         super(RawAudioCNN, self).__init__()
         
-        # Larger network with more layers and filters
-        # Conv1D expects shape: [batch, channels, time]
+        # Using fixed pooling sizes instead of adaptive pooling
         self.features = nn.Sequential(
             # First block
-            nn.Conv1d(in_channels=1, out_channels=32, kernel_size=7, stride=1, padding=3),
+            nn.Conv1d(in_channels=1, out_channels=16, kernel_size=160, stride=32, padding=3),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=4),  # Increased pool size to reduce dimensions faster
+
+            # Second block
+            nn.Conv1d(in_channels=16, out_channels=32, kernel_size=9, stride=2, padding=2),
             nn.BatchNorm1d(32),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),
-            
-            # Second block
-            nn.Conv1d(in_channels=32, out_channels=64, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),
-            
+            nn.MaxPool1d(kernel_size=4),  # Increased pool size
+
             # Third block
-            nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(128),
+            nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),
-            
-            # Fourth block
-            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),
-            
-            # Fifth block
-            nn.Conv1d(in_channels=256, out_channels=512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2),
-            
-            # Global pooling
-            nn.AdaptiveAvgPool1d(16)  # reduce to fixed size
+            nn.MaxPool1d(kernel_size=4),  # Increased pool size
         )
         
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 16, 1024),
+            nn.Linear(960, 256),  # Make sure this matches your input size
             nn.ReLU(),
-            nn.Dropout(0.5),
-            
-            nn.Linear(1024, 512),
+            nn.Dropout(0.2),
+            nn.Linear(256, 32),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            
-            nn.Linear(512, num_classes)
+            nn.Dropout(0.2),
+            nn.Linear(32, 1)
         )
 
     def forward(self, x):
@@ -59,7 +40,7 @@ class RawAudioCNN(nn.Module):
         x = self.features(x)
         x = x.view(x.size(0), -1)  # flatten
         x = self.classifier(x)
-        return x
+        return x.squeeze(-1)
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path, device='cpu'):
